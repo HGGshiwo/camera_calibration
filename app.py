@@ -42,7 +42,7 @@ calibration_progress = 0
 calibration_message = ""
 calibration_results = {}
 camera = None
-chessboard_size = (9, 6)  # 默认棋盘格尺寸
+chessboard_size = (9, 6, 1)  # 默认棋盘格尺寸
 camera_lock = threading.Lock()  # 摄像头访问锁
 
 
@@ -385,9 +385,9 @@ async def reset_calibration():
     calibration_progress = 0
     calibration_message = "标定已重置"
     calibration_results = {}
-    chessboard_size = (9, 6)  # 重置为默认值
+    # chessboard_size = (9, 6)  # 重置为默认值
     calibrator.reset()
-    calibrator.set_chessboard_size(9, 6)  # 重置为默认尺寸
+    # calibrator.set_chessboard_size(9, 6)  # 重置为默认尺寸
 
     return JSONResponse({"status": "success", "message": "标定已重置"})
 
