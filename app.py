@@ -17,6 +17,12 @@ from calibration import CameraCalibrator
 import io
 import time
 from PIL import Image, ImageDraw, ImageFont
+from argparse import ArgumentParser
+
+parser = ArgumentParser()
+parser.add_argument("--camera", default=0, type=str, help="camera name to caliberate")
+parser.add_argument("--port", default=5000, type=int, help="port to run the server")
+args = parser.parse_args()
 
 app = FastAPI(title="摄像头自动标定系统", version="1.0.0")
 
@@ -60,13 +66,14 @@ def init_camera():
     with camera_lock:
         if camera is None or not camera.isOpened():
             try:
-                camera = cv2.VideoCapture(0)
+                try:
+                    args.camera = int(args.camera)
+                except Exception:
+                    pass
+                camera = cv2.VideoCapture(args.camera)
                 if not camera.isOpened():
-                    # 尝试其他摄像头索引
-                    for i in range(1, 4):
-                        camera = cv2.VideoCapture(i)
-                        if camera.isOpened():
-                            break
+                    print(f"Can't open camera {args.camera}")
+                    exit(-1)
 
                 if camera.isOpened():
                     # 设置摄像头分辨率
@@ -83,7 +90,9 @@ def init_camera():
     return camera
 
 
-def calibration_thread(chessboard_width: int, chessboard_height: int, square_size: float):
+def calibration_thread(
+    chessboard_width: int, chessboard_height: int, square_size: float
+):
     """标定线程"""
     global is_calibrating, calibration_progress, calibration_message, calibration_results, chessboard_size
 
@@ -266,7 +275,8 @@ async def start_calibration(size: ChessboardSize):
 
     is_calibrating = True
     calibration_thread_instance = threading.Thread(
-        target=calibration_thread, args=(size.chessboard_width, size.chessboard_height, size.square_size)
+        target=calibration_thread,
+        args=(size.chessboard_width, size.chessboard_height, size.square_size),
     )
     calibration_thread_instance.daemon = True
     calibration_thread_instance.start()
@@ -308,7 +318,9 @@ async def update_chessboard_size(size: ChessboardSize):
 
     # 重置标定器
     calibrator.reset()
-    calibrator.set_chessboard_size(size.chessboard_width, size.chessboard_height, size.square_size)
+    calibrator.set_chessboard_size(
+        size.chessboard_width, size.chessboard_height, size.square_size
+    )
 
     # 重置标定状态
     calibration_progress = 0
@@ -392,4 +404,4 @@ static_dir = Path(__file__).parent.joinpath("app", "dist")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
