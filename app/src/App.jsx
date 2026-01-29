@@ -28,6 +28,7 @@ function App() {
     hasResults: false,
     cameraMatrix: null,
     distCoeffs: null,
+    fov: null,
     showResultsCard: false,
   });
 
@@ -35,10 +36,12 @@ function App() {
     chessboardWidth: 9,
     chessboardHeight: 6,
     squareSize: 0.01,
+    rawSquareSize: "0.01", // 新增：存储输入的原始字符串值
     isEditing: false,
     originalWidth: 9,
     originalHeight: 6,
     originalSquareSize: 0.01,
+    originalRawSquareSize: "0.01", // 新增：存储编辑前的原始字符串值
     configMessage: "",
     configMessageType: "",
   });
@@ -52,7 +55,6 @@ function App() {
 
     try {
       const data = await getCalibrationStatus();
-      console.log(123, data);
       setCalibrationState((prev) => ({
         ...prev,
         statusText: data.is_calibrating
@@ -77,6 +79,7 @@ function App() {
         hasResults: data.has_results || false,
         cameraMatrix: data.camera_matrix || null,
         distCoeffs: data.dist_coeffs || null,
+        fov: data.fov || null,
         showResultsCard: data.has_results || false,
       }));
 
@@ -87,6 +90,7 @@ function App() {
           chessboardWidth: data.chessboard_size[0],
           chessboardHeight: data.chessboard_size[1],
           squareSize: data.chessboard_size[2],
+          rawSquareSize: data.chessboard_size[2].toString(), // 更新字符串表示
         }));
       }
     } catch (error) {
@@ -180,7 +184,8 @@ function App() {
       isEditing: true,
       originalWidth: prev.chessboardWidth,
       originalHeight: prev.chessboardHeight,
-      squareSize: prev.squareSize,
+      originalSquareSize: prev.squareSize,
+      originalRawSquareSize: prev.rawSquareSize, // 保存编辑前的原始字符串值
       configMessage: "",
       configMessageType: "",
     }));
@@ -194,14 +199,36 @@ function App() {
       isEditing: false,
       chessboardWidth: prev.originalWidth,
       chessboardHeight: prev.originalHeight,
-      squareSize: prev.squareSize,
+      squareSize: prev.originalSquareSize,
+      rawSquareSize: prev.originalRawSquareSize, // 恢复编辑前的原始字符串值
       configMessage: "",
       configMessageType: "",
     }));
   };
 
   const handleConfirmEdit = async () => {
-    const { chessboardWidth, chessboardHeight, squareSize } = configState;
+    const { chessboardWidth, chessboardHeight, rawSquareSize } = configState;
+
+    // 验证并转换squareSize
+    let squareSizeNum;
+    try {
+      squareSizeNum = parseFloat(rawSquareSize);
+      if (isNaN(squareSizeNum) || squareSizeNum <= 0) {
+        setConfigState((prev) => ({
+          ...prev,
+          configMessage: "方格大小必须是一个大于0的数字",
+          configMessageType: "error",
+        }));
+        return;
+      }
+    } catch (error) {
+      setConfigState((prev) => ({
+        ...prev,
+        configMessage: "方格大小格式无效，请输入有效数字",
+        configMessageType: "error",
+      }));
+      return;
+    }
 
     // 验证输入
     if (chessboardWidth < 3 || chessboardHeight < 3) {
@@ -226,13 +253,14 @@ function App() {
       const data = await updateChessboardSize(
         chessboardWidth,
         chessboardHeight,
-        squareSize,
+        squareSizeNum,
       );
       if (data.status === "success") {
         setConfigState((prev) => ({
           ...prev,
           configMessage: data.message,
           configMessageType: "success",
+          squareSize: squareSizeNum, // 更新数字值
         }));
 
         // 设置跳过下一次状态更新
@@ -290,11 +318,21 @@ function App() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    const parseFunc = name == "squareSize" ? parseFloat : parseInt;
-    setConfigState((prev) => ({
-      ...prev,
-      [name]: parseFunc(value) || "",
-    }));
+
+    if (name === "squareSize") {
+      // 对于squareSize，直接保存原始字符串值，不进行转换
+      setConfigState((prev) => ({
+        ...prev,
+        rawSquareSize: value, // 保存原始字符串
+      }));
+    } else {
+      // 其他字段正常转换为数字
+      const parseFunc = parseInt;
+      setConfigState((prev) => ({
+        ...prev,
+        [name]: parseFunc(value) || "",
+      }));
+    }
   };
 
   const handleInputBlur = (fieldName) => {
@@ -305,20 +343,52 @@ function App() {
       originalSquareSize,
       chessboardWidth,
       chessboardHeight,
-      squareSize,
+      rawSquareSize,
     } = configState;
 
     if (isEditing) {
       if (
         (fieldName === "width" && chessboardWidth !== originalWidth) ||
-        (fieldName === "height" && chessboardHeight !== originalHeight) ||
-        (fieldName == "square_size" && squareSize !== originalSquareSize)
+        (fieldName === "height" && chessboardHeight !== originalHeight)
       ) {
         setConfigState((prev) => ({
           ...prev,
           configMessage: '尺寸已修改，请点击"确认修改"按钮保存',
           configMessageType: "success",
         }));
+      }
+
+      // 对于squareSize字段，在blur时进行验证和转换
+      if (fieldName === "square_size") {
+        try {
+          const squareSizeNum = parseFloat(rawSquareSize);
+          if (isNaN(squareSizeNum) || squareSizeNum <= 0) {
+            // 验证失败
+            setConfigState((prev) => ({
+              ...prev,
+              configMessage: "方格大小必须是一个大于0的数字",
+              configMessageType: "error",
+            }));
+          } else {
+            if (squareSizeNum != originalSquareSize) {
+              // 验证成功，更新数字值并保持字符串值
+              setConfigState((prev) => ({
+                ...prev,
+                squareSize: squareSizeNum, // 更新数字值
+                configMessage: '尺寸已修改，请点击"确认修改"按钮保存',
+                configMessageType: "success",
+              }));
+            }
+          }
+        } catch (error) {
+          // 解析失败，恢复为原始值
+          setConfigState((prev) => ({
+            ...prev,
+            rawSquareSize: prev.originalRawSquareSize, // 恢复原始字符串值
+            configMessage: "方格大小格式无效，请输入有效数字",
+            configMessageType: "error",
+          }));
+        }
       }
     }
   };
@@ -357,7 +427,7 @@ function App() {
             onInputBlur={handleInputBlur}
             onKeyPress={handleKeyPress}
           />
-          
+
           <StatusCard
             statusText={calibrationState.statusText}
             statusColor={calibrationState.statusColor}
@@ -373,6 +443,7 @@ function App() {
               cameraMatrix={calibrationState.cameraMatrix}
               distCoeffs={calibrationState.distCoeffs}
               chessboardSize={calibrationState.chessboardSize}
+              fov={calibrationState.fov}
               onDownload={handleDownloadResults}
             />
           )}

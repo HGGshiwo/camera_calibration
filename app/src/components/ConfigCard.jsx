@@ -13,6 +13,7 @@ const ConfigCard = ({
     chessboardWidth,
     chessboardHeight,
     squareSize,
+    rawSquareSize,
     isEditing,
     configMessage,
     configMessageType,
@@ -62,8 +63,7 @@ const ConfigCard = ({
             name="squareSize"
             className="form-control"
             min="0"
-            max="0.5"
-            value={squareSize}
+            value={isEditing ? rawSquareSize : squareSize}
             readOnly={!isEditing}
             onChange={onInputChange}
             onBlur={() => onInputBlur("square_size")}

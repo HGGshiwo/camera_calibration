@@ -14,7 +14,7 @@ import time
 import asyncio
 from typing import Optional, Dict, Any, List
 import uvicorn
-from calibration import CameraCalibrator
+from calibration import CalibrationResults, CameraCalibrator
 import io
 import time
 from PIL import Image, ImageDraw, ImageFont
@@ -26,6 +26,10 @@ parser.add_argument("--camera", default=0, type=str, help="camera name to calibe
 parser.add_argument("--port", default=5000, type=int, help="port to run the server")
 parser.add_argument("--width", default=640, type=int, help="image width")
 parser.add_argument("--height", default=480, type=int, help="image height")
+parser.add_argument(
+    "--output-dir", default="calibration_results", type=Path, help="dir to save results"
+)
+
 args = parser.parse_args()
 
 app = FastAPI(title="摄像头自动标定系统", version="1.0.0")
@@ -44,7 +48,7 @@ calibrator = CameraCalibrator()
 is_calibrating = False
 calibration_progress = 0
 calibration_message = ""
-calibration_results = {}
+calibration_results = None
 camera = None
 chessboard_size = (9, 6, 1)  # 默认棋盘格尺寸
 camera_lock = threading.Lock()  # 摄像头访问锁
@@ -146,46 +150,24 @@ def update_progress(progress: int, message: str):
     calibration_message = message
 
 
-def save_calibration_results(results: Dict[str, Any]):
+def save_calibration_results(results: CalibrationResults):
     """保存标定结果到文件"""
-    if not os.path.exists("calibration_results"):
-        os.makedirs("calibration_results")
+    output_dir: Path = args.output_dir
+    output_dir.mkdir(exist_ok=True, parents=True)
 
     try:
         # 保存为JSON
-        with open("calibration_results/calibration.json", "w") as f:
-            json.dump(
-                {
-                    "camera_matrix": results["camera_matrix"].tolist(),
-                    "dist_coeffs": results["dist_coeffs"].tolist(),
-                    "reprojection_error": results["reprojection_error"],
-                    "calibration_images": results["calibration_images"],
-                    "chessboard_size": results["chessboard_size"],
-                },
-                f,
-                indent=2,
-            )
+        with open(output_dir.joinpath("calibration.json"), "w") as f:
+            results.save_json(f)
 
         # 保存为NumPy格式
-        np.savez(
-            "calibration_results/calibration.npz",
-            camera_matrix=results["camera_matrix"],
-            dist_coeffs=results["dist_coeffs"],
-        )
+        results.save_numpy(output_dir.joinpath("calibration.npz"))
 
         # 保存为文本格式便于查看
-        with open("calibration_results/calibration.txt", "w") as f:
-            f.write("相机标定结果\n")
-            f.write("=" * 50 + "\n\n")
-            f.write(f"棋盘格尺寸: {results['chessboard_size']}\n")
-            f.write(f"标定图片数量: {results['calibration_images']}\n")
-            f.write(f"重投影误差: {results['reprojection_error']:.6f}\n\n")
-            f.write("相机矩阵:\n")
-            np.savetxt(f, results["camera_matrix"], fmt="%10.5f")
-            f.write("\n畸变系数:\n")
-            np.savetxt(f, results["dist_coeffs"], fmt="%10.5f")
+        with open(output_dir.joinpath("calibration.txt"), "w") as f:
+            results.save_text(f)
 
-        print("标定结果已保存到 calibration_results/ 目录")
+        print(f"标定结果已保存到 {output_dir.absolute()} 目录")
 
     except Exception as e:
         print(f"保存标定结果时出错: {e}")
@@ -233,8 +215,7 @@ async def lifespan(app: FastAPI):
     print("摄像头自动标定系统启动中...")
     # 初始化摄像头
     init_camera()
-    # 确保标定结果目录存在
-    os.makedirs("calibration_results", exist_ok=True)
+
     yield
     global camera
     with camera_lock:
@@ -325,7 +306,7 @@ async def update_chessboard_size(size: ChessboardSize):
     # 重置标定状态
     calibration_progress = 0
     calibration_message = f"棋盘格尺寸已更新为 {size.chessboard_width}x{size.chessboard_height}，请重新开始标定"
-    calibration_results = {}
+    calibration_results = None
 
     return JSONResponse(
         {
@@ -345,20 +326,19 @@ async def get_calibration_status():
         "is_calibrating": is_calibrating,
         "progress": calibration_progress,
         "message": calibration_message,
-        "has_results": len(calibration_results) > 0,
+        "has_results": calibration_results is not None,
         "chessboard_size": list(chessboard_size),
     }
 
     if calibration_results:
         response.update(
             {
-                "camera_matrix": calibration_results["camera_matrix"].tolist(),
-                "dist_coeffs": calibration_results["dist_coeffs"].flatten().tolist(),
-                "reprojection_error": float(calibration_results["reprojection_error"]),
-                "num_images": calibration_results["calibration_images"],
-                "chessboard_size": calibration_results.get(
-                    "chessboard_size", list(chessboard_size)
-                ),
+                "camera_matrix": calibration_results.camera_matrix.tolist(),
+                "dist_coeffs": calibration_results.dist_coeffs.flatten().tolist(),
+                "reprojection_error": float(calibration_results.reprojection_error),
+                "num_images": calibration_results.calibration_images,
+                "chessboard_size": calibration_results.chessboard_size,
+                "fov": calibration_results.fov
             }
         )
 
@@ -368,8 +348,10 @@ async def get_calibration_status():
 @app.get("/get_calibration_results")
 async def get_calibration_results():
     """获取标定结果"""
-    if os.path.exists("calibration_results/calibration.json"):
-        with open("calibration_results/calibration.json", "r") as f:
+    output_dir: Path = args.output_dir
+    json_path = output_dir.joinpath("calibration.json")
+    if json_path.exists():
+        with open(json_path, "r") as f:
             results = json.load(f)
         return JSONResponse({"status": "success", "results": results})
     else:
@@ -384,9 +366,9 @@ async def reset_calibration():
     calibrator.stop_calibration = True
     calibration_progress = 0
     calibration_message = "标定已重置"
-    calibration_results = {}
+    calibration_results = None
     calibrator.reset()
-    
+
     return JSONResponse({"status": "success", "message": "标定已重置"})
 
 
