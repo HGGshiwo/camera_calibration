@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import cv2
 import numpy as np
 import json
-import os
+import os, sys
 import threading
 import time
 import asyncio
@@ -19,10 +19,13 @@ import io
 import time
 from PIL import Image, ImageDraw, ImageFont
 from argparse import ArgumentParser
+from contextlib import asynccontextmanager
 
 parser = ArgumentParser()
 parser.add_argument("--camera", default=0, type=str, help="camera name to caliberate")
 parser.add_argument("--port", default=5000, type=int, help="port to run the server")
+parser.add_argument("--width", default=640, type=int, help="image width")
+parser.add_argument("--height", default=480, type=int, help="image height")
 args = parser.parse_args()
 
 app = FastAPI(title="摄像头自动标定系统", version="1.0.0")
@@ -74,20 +77,21 @@ def init_camera():
                 camera = cv2.VideoCapture(args.camera)
                 if not camera.isOpened():
                     print(f"Can't open camera {args.camera}")
-                    exit(-1)
+                    sys.exit(-1)
 
                 if camera.isOpened():
                     # 设置摄像头分辨率
-                    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    camera.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+                    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
                     camera.set(cv2.CAP_PROP_FPS, 30)
-                    print(f"摄像头已初始化: 分辨率 640x480")
+                    print(f"摄像头已初始化: 分辨率 {args.width}x{args.height}")
                 else:
-                    print("警告: 无法打开摄像头，将使用模拟帧")
+                    print("警告: 无法打开摄像头")
+                    sys.exit(-1)
 
             except Exception as e:
                 print(f"初始化摄像头时出错: {e}")
-                camera = None
+                sys.exit(-1)
     return camera
 
 
@@ -223,20 +227,15 @@ def generate_frames():
             continue
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """应用启动时初始化"""
     print("摄像头自动标定系统启动中...")
     # 初始化摄像头
     init_camera()
     # 确保标定结果目录存在
     os.makedirs("calibration_results", exist_ok=True)
-    os.makedirs("static", exist_ok=True)
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时清理资源"""
+    yield
     global camera
     with camera_lock:
         if camera is not None:
@@ -386,10 +385,8 @@ async def reset_calibration():
     calibration_progress = 0
     calibration_message = "标定已重置"
     calibration_results = {}
-    # chessboard_size = (9, 6)  # 重置为默认值
     calibrator.reset()
-    # calibrator.set_chessboard_size(9, 6)  # 重置为默认尺寸
-
+    
     return JSONResponse({"status": "success", "message": "标定已重置"})
 
 
