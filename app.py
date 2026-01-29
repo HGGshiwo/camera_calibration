@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from pathlib import Path
 from fastapi import FastAPI, Response, Request, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
